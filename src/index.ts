@@ -268,6 +268,16 @@ const DownloadAttachmentSchema = z.object({
     savePath: z.string().optional().describe("Directory path to save the attachment (defaults to current directory)"),
 });
 
+const ForwardEmailSchema = z.object({
+    messageId: z.string().describe("ID of the email message to forward"),
+    to: z.array(z.string()).describe("List of recipient email addresses to forward to"),
+    subject: z.string().optional().describe("Optional custom subject (if not provided, uses 'Fwd: ' + original subject)"),
+    body: z.string().optional().describe("Optional additional message to include above the forwarded content"),
+    cc: z.array(z.string()).optional().describe("List of CC recipients"),
+    bcc: z.array(z.string()).optional().describe("List of BCC recipients"),
+    includeAttachments: z.boolean().optional().default(true).describe("Whether to include attachments from the original message"),
+});
+
 // Main function
 async function main() {
     await loadCredentials();
@@ -362,6 +372,11 @@ async function main() {
                 name: "download_attachment",
                 description: "Downloads an email attachment to a specified location",
                 inputSchema: zodToJsonSchema(DownloadAttachmentSchema),
+            },
+            {
+                name: "forward_email",
+                description: "Forwards an email message to new recipients",
+                inputSchema: zodToJsonSchema(ForwardEmailSchema),
             },
         ],
     }))
@@ -952,6 +967,136 @@ async function main() {
                                 {
                                     type: "text",
                                     text: `Failed to download attachment: ${error.message}`,
+                                },
+                            ],
+                        };
+                    }
+                }
+
+                case "forward_email": {
+                    const validatedArgs = ForwardEmailSchema.parse(args);
+                    
+                    try {
+                        // Get the original message
+                        const originalMessage = await gmail.users.messages.get({
+                            userId: 'me',
+                            id: validatedArgs.messageId,
+                            format: 'full',
+                        });
+
+                        if (!originalMessage.data.payload) {
+                            throw new Error('Unable to retrieve original message payload');
+                        }
+
+                        // Extract original message details
+                        const headers = originalMessage.data.payload.headers || [];
+                        const originalSubject = headers.find(h => h.name?.toLowerCase() === 'subject')?.value || 'No Subject';
+                        const originalFrom = headers.find(h => h.name?.toLowerCase() === 'from')?.value || '';
+                        const originalTo = headers.find(h => h.name?.toLowerCase() === 'to')?.value || '';
+                        const originalDate = headers.find(h => h.name?.toLowerCase() === 'date')?.value || '';
+
+                        // Create forward subject
+                        const forwardSubject = validatedArgs.subject || `Fwd: ${originalSubject}`;
+
+                        // Extract original email content
+                        const { text, html } = extractEmailContent(originalMessage.data.payload as GmailMessagePart);
+                        const originalContent = text || html || '';
+
+                        // Create forwarded message body
+                        const forwardHeader = `\n\n---------- Forwarded message ---------\nFrom: ${originalFrom}\nDate: ${originalDate}\nSubject: ${originalSubject}\nTo: ${originalTo}\n\n`;
+                        
+                        const forwardBody = (validatedArgs.body ? validatedArgs.body + '\n\n' : '') + forwardHeader + originalContent;
+
+                        // Handle attachments if requested
+                        let attachmentPaths: string[] = [];
+                        if (validatedArgs.includeAttachments) {
+                            // Get attachment information
+                            const attachments: EmailAttachment[] = [];
+                            const processAttachmentParts = (part: GmailMessagePart) => {
+                                if (part.body && part.body.attachmentId) {
+                                    const filename = part.filename || `attachment-${part.body.attachmentId}`;
+                                    attachments.push({
+                                        id: part.body.attachmentId,
+                                        filename: filename,
+                                        mimeType: part.mimeType || 'application/octet-stream',
+                                        size: part.body.size || 0
+                                    });
+                                }
+
+                                if (part.parts) {
+                                    part.parts.forEach(processAttachmentParts);
+                                }
+                            };
+
+                            processAttachmentParts(originalMessage.data.payload as GmailMessagePart);
+
+                            // Download attachments to temp directory
+                            if (attachments.length > 0) {
+                                const tempDir = path.join(os.tmpdir(), `gmail-forward-${Date.now()}`);
+                                if (!fs.existsSync(tempDir)) {
+                                    fs.mkdirSync(tempDir, { recursive: true });
+                                }
+
+                                for (const attachment of attachments) {
+                                    try {
+                                        const attachmentResponse = await gmail.users.messages.attachments.get({
+                                            userId: 'me',
+                                            messageId: validatedArgs.messageId,
+                                            id: attachment.id,
+                                        });
+
+                                        if (attachmentResponse.data.data) {
+                                            const buffer = Buffer.from(attachmentResponse.data.data, 'base64url');
+                                            const filePath = path.join(tempDir, attachment.filename);
+                                            fs.writeFileSync(filePath, buffer);
+                                            attachmentPaths.push(filePath);
+                                        }
+                                    } catch (attachmentError) {
+                                        console.warn(`Failed to download attachment ${attachment.filename}:`, attachmentError);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Create the forward email arguments
+                        const forwardEmailArgs = {
+                            to: validatedArgs.to,
+                            subject: forwardSubject,
+                            body: forwardBody,
+                            cc: validatedArgs.cc,
+                            bcc: validatedArgs.bcc,
+                            attachments: attachmentPaths,
+                            mimeType: 'text/plain'
+                        };
+
+                        // Send the forwarded email using existing send functionality
+                        const result = await handleEmailAction("send", forwardEmailArgs);
+
+                        // Clean up temporary attachment files
+                        if (attachmentPaths.length > 0) {
+                            const tempDir = path.dirname(attachmentPaths[0]);
+                            try {
+                                // Remove temp directory and all files
+                                fs.rmSync(tempDir, { recursive: true, force: true });
+                            } catch (cleanupError) {
+                                console.warn('Failed to clean up temporary files:', cleanupError);
+                            }
+                        }
+
+                        return {
+                            content: [
+                                {
+                                    type: "text",
+                                    text: `Email forwarded successfully to ${validatedArgs.to.join(', ')}${attachmentPaths.length > 0 ? ` with ${attachmentPaths.length} attachments` : ''}`,
+                                },
+                            ],
+                        };
+                    } catch (error: any) {
+                        return {
+                            content: [
+                                {
+                                    type: "text",
+                                    text: `Failed to forward email: ${error.message}`,
                                 },
                             ],
                         };
