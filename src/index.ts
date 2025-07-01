@@ -1000,12 +1000,15 @@ async function main() {
 
                         // Extract original email content
                         const { text, html } = extractEmailContent(originalMessage.data.payload as GmailMessagePart);
-                        const originalContent = text || html || '';
+                        const originalContent = html || text || '';
+                        const isHtml = !!html;
 
                         // Create forwarded message body
-                        const forwardHeader = `\n\n---------- Forwarded message ---------\nFrom: ${originalFrom}\nDate: ${originalDate}\nSubject: ${originalSubject}\nTo: ${originalTo}\n\n`;
+                        const forwardHeader = isHtml ? 
+                            `<br><br>---------- Forwarded message ---------<br>From: ${originalFrom}<br>Date: ${originalDate}<br>Subject: ${originalSubject}<br>To: ${originalTo}<br><br>` :
+                            `\n\n---------- Forwarded message ---------\nFrom: ${originalFrom}\nDate: ${originalDate}\nSubject: ${originalSubject}\nTo: ${originalTo}\n\n`;
                         
-                        const forwardBody = (validatedArgs.body ? validatedArgs.body + '\n\n' : '') + forwardHeader + originalContent;
+                        const forwardBody = (validatedArgs.body ? validatedArgs.body + (isHtml ? '<br><br>' : '\n\n') : '') + forwardHeader + originalContent;
 
                         // Handle attachments if requested
                         let attachmentPaths: string[] = [];
@@ -1062,11 +1065,12 @@ async function main() {
                         const forwardEmailArgs = {
                             to: validatedArgs.to,
                             subject: forwardSubject,
-                            body: forwardBody,
+                            body: isHtml ? undefined : forwardBody,
+                            htmlBody: isHtml ? forwardBody : undefined,
                             cc: validatedArgs.cc,
                             bcc: validatedArgs.bcc,
                             attachments: attachmentPaths,
-                            mimeType: 'text/plain'
+                            mimeType: isHtml ? 'text/html' : 'text/plain'
                         };
 
                         // Send the forwarded email using existing send functionality
