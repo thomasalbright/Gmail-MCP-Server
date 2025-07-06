@@ -69,6 +69,12 @@ npx -y @smithery/cli install @gongrzhe/server-gmail-autoauth-mcp --client claude
    npx @gongrzhe/server-gmail-autoauth-mcp auth
    ```
 
+   If you are authenticating from a local checkout, run:
+   ```bash
+   npm run build
+   npm run auth
+   ```
+
    b. Local Authentication:
    ```bash
    # Place gcp-oauth.keys.json in your current directory
