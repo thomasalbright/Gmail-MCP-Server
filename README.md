@@ -75,6 +75,11 @@ npx -y @smithery/cli install @gongrzhe/server-gmail-autoauth-mcp --client claude
    npm run auth
    ```
 
+   To authenticate to a specific set of keys, which I do for designating between my gmail accounts:
+   ```bash
+   GMAIL_OAUTH_PATH=~/.gmail-mcp/thomas.gcp-oauth.keys.json GMAIL_CREDENTIALS_PATH=~/.gmail-mcp/thomas.credentials.json npm run auth
+   ```
+
    b. Local Authentication:
    ```bash
    # Place gcp-oauth.keys.json in your current directory
